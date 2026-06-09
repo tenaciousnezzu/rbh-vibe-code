@@ -1,20 +1,14 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Hotel, StateData, OptionResult, calculateAllOptions } from "@/lib/financialModel";
 import { NasaData } from "@/lib/nasaPower";
+import { CurrencyCode, SYMBOLS, RATES } from "@/lib/currency";
 import StepIndicator from "@/components/StepIndicator";
 import HotelSelector from "@/components/HotelSelector";
 import TrackSelector, { Track } from "@/components/TrackSelector";
 import AnalysisDashboard from "@/components/AnalysisDashboard";
-
-interface Incentive {
-  name: string;
-  type: "subsidy" | "tax_benefit" | "regulation";
-  amount: string;
-  howToUse: string;
-  applicableTo: string[];
-}
+import { Incentive } from "@/components/IncentiveCards";
 
 interface Recommendation {
   bestOptionId: string;
@@ -34,6 +28,27 @@ export default function Home() {
   const [recommendation, setRecommendation] = useState<Recommendation | null>(null);
   const [options, setOptions] = useState<OptionResult[]>([]);
   const [loadingApis, setLoadingApis] = useState(false);
+  const [loadingIncentives, setLoadingIncentives] = useState(false);
+  const [loadingRecommendation, setLoadingRecommendation] = useState(false);
+  const [currency, setCurrency] = useState<CurrencyCode>("INR");
+  const [hasSolarSpace, setHasSolarSpace] = useState<boolean>(true);
+  const [selectedSolarLabel, setSelectedSolarLabel] = useState<string>("");
+
+  // Keep a ref to currency so callbacks always see the latest value
+  const currencyRef = useRef<CurrencyCode>(currency);
+  useEffect(() => { currencyRef.current = currency; }, [currency]);
+
+  // Change 1D: dev-mode ₹ guard — fires on every render when currency is not INR
+  useEffect(() => {
+    if (process.env.NODE_ENV === "development" && currency !== "INR") {
+      const bodyText = document.body.innerText;
+      if (bodyText.includes(SYMBOLS.INR)) {
+        console.error(
+          `CURRENCY BUG: ${SYMBOLS.INR} symbol found in DOM but selected currency is ${currency}. Find and fix the hardcoded symbol.`
+        );
+      }
+    }
+  });
 
   useEffect(() => {
     Promise.all([
@@ -50,81 +65,73 @@ export default function Home() {
     [states]
   );
 
+  // Called when user clicks Continue on Step 1
   const handleHotelSelect = useCallback(
-    async (hotel: Hotel) => {
+    async (hotel: Hotel, solarSpace: boolean, solarLabel: string) => {
+      // Read currency from ref to always get current value
+      const activeCurrency = currencyRef.current;
+      const activeSymbol   = SYMBOLS[activeCurrency];
+      const activeRate     = RATES[activeCurrency];
+
       setSelectedHotel(hotel);
+      setHasSolarSpace(solarSpace);
+      setSelectedSolarLabel(solarLabel);
       setStep(2);
       setLoadingApis(true);
+      setLoadingIncentives(true);
+      setLoadingRecommendation(true);
       setNasa(null);
       setIncentives([]);
       setRecommendation(null);
 
       const stateData = getStateData(hotel.state);
-      if (!stateData) { setLoadingApis(false); return; }
+      if (!stateData) { setLoadingApis(false); setLoadingIncentives(false); setLoadingRecommendation(false); return; }
 
-      const fallbackNasa: NasaData = {
-        solarIrradiance: stateData.solarIrradianceKwhM2Day,
-        windSpeed: 4.0,
-        source: "estimated",
-      };
+      const fallbackNasa: NasaData = { solarIrradiance: stateData.solarIrradianceKwhM2Day, windSpeed: 4.0, source: "estimated" };
 
       const [nasaRes, subsidyRes] = await Promise.allSettled([
-        fetch(
-          `https://power.larc.nasa.gov/api/temporal/climatology/point?parameters=ALLSKY_SFC_SW_DWN,WS10M&community=RE&longitude=${hotel.lng}&latitude=${hotel.lat}&format=JSON`
-        )
+        fetch(`https://power.larc.nasa.gov/api/temporal/climatology/point?parameters=ALLSKY_SFC_SW_DWN,WS10M&community=RE&longitude=${hotel.lng}&latitude=${hotel.lat}&format=JSON`)
           .then((r) => r.json())
-          .then((d) => ({
-            solarIrradiance: d.properties.parameter.ALLSKY_SFC_SW_DWN.ANN as number,
-            windSpeed: d.properties.parameter.WS10M.ANN as number,
-            source: "live" as const,
-          }))
+          .then((d) => ({ solarIrradiance: d.properties.parameter.ALLSKY_SFC_SW_DWN.ANN as number, windSpeed: d.properties.parameter.WS10M.ANN as number, source: "live" as const }))
           .catch(() => fallbackNasa),
+        // Pass currency to subsidies API
         fetch("/api/subsidies", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            hotelId: hotel.id,
-            state: hotel.state,
-            city: hotel.city,
-            ownership: hotel.ownership,
-            annualKwh: hotel.annualElectricityKwh,
+            hotelId: hotel.id, state: hotel.state, city: hotel.city,
+            ownership: hotel.ownership, annualKwh: hotel.annualElectricityKwh,
             annualBill: hotel.monthlyElectricityBillINR * 12,
+            currency: activeCurrency, currencySymbol: activeSymbol, currencyRate: activeRate,
           }),
         }).then((r) => r.json()),
       ]);
 
-      const nasaData: NasaData =
-        nasaRes.status === "fulfilled" ? nasaRes.value : fallbackNasa;
-
-      const subsidiesData =
-        subsidyRes.status === "fulfilled"
-          ? (subsidyRes.value as { subsidies: Incentive[] }).subsidies || []
-          : [];
+      const nasaData: NasaData = nasaRes.status === "fulfilled" ? nasaRes.value : fallbackNasa;
+      const subsidiesData: Incentive[] = subsidyRes.status === "fulfilled" ? (subsidyRes.value as { subsidies: Incentive[] }).subsidies || [] : [];
 
       setNasa(nasaData);
       setIncentives(subsidiesData);
+      setLoadingIncentives(false);
 
       const calcOptions = calculateAllOptions(hotel, stateData, nasaData);
       setOptions(calcOptions);
+      setLoadingApis(false);
 
       try {
+        // Pass currency to recommend API
         const recRes = await fetch("/api/recommend", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            hotel,
-            state: stateData,
-            nasa: nasaData,
-            calculatedOptions: calcOptions,
+            hotel, state: stateData, nasa: nasaData, calculatedOptions: calcOptions,
+            currency: activeCurrency, currencySymbol: activeSymbol, currencyRate: activeRate,
           }),
         });
         const rec = await recRes.json();
         setRecommendation(rec);
-      } catch {
-        // recommendation stays null
-      }
-
-      setLoadingApis(false);
+      } catch { /* stays null */ }
+      setLoadingRecommendation(false);
     },
     [getStateData]
   );
@@ -139,9 +146,7 @@ export default function Home() {
     const updated = { ...selectedHotel, monthlyElectricityBillINR: amount, billEstimated: false };
     setSelectedHotel(updated);
     const stateData = getStateData(updated.state);
-    if (stateData && nasa) {
-      setOptions(calculateAllOptions(updated, stateData, nasa));
-    }
+    if (stateData && nasa) setOptions(calculateAllOptions(updated, stateData, nasa));
   };
 
   const stateData = selectedHotel ? getStateData(selectedHotel.state) : null;
@@ -156,35 +161,36 @@ export default function Home() {
         </div>
       )}
 
-      {step === 1 && <HotelSelector hotels={hotels} onSelect={handleHotelSelect} />}
+      {step === 1 && (
+        <HotelSelector
+          hotels={hotels}
+          states={states}
+          initialCurrency={currency}
+          onCurrencyChange={setCurrency}
+          onSelect={handleHotelSelect}
+        />
+      )}
 
       {step === 2 && selectedHotel && (
         <TrackSelector
           hotel={selectedHotel}
           loading={loadingApis}
           nasaCity={selectedHotel.city}
+          hasSolarSpace={hasSolarSpace}
+          recommendedOptionId={recommendation?.bestOptionId}
+          options={options}
+          currency={currency}
+          selectedSolarLabel={selectedSolarLabel}
           onSelect={handleTrackSelect}
+          onBack={() => setStep(1)}
         />
       )}
 
       {step === 3 && selectedHotel && stateData && nasa && selectedTrack && (
         <>
           <div className="border-b border-gray-100 bg-white px-8 py-4">
-            <div className="max-w-5xl mx-auto flex items-center gap-3">
-              <div className="w-32 h-10 bg-gray-100 rounded flex items-center justify-center text-xs text-gray-400 font-medium">
-                Radisson Blu
-              </div>
-              <div className="flex-1" />
-              <button
-                onClick={() => {
-                  setStep(1);
-                  setSelectedHotel(null);
-                  setSelectedTrack(null);
-                }}
-                className="text-xs text-gray-400 hover:text-gray-600 transition-colors"
-              >
-                ← Start over
-              </button>
+            <div className="max-w-5xl mx-auto">
+              <span className="text-base font-semibold text-[#1E1E1E]">AI Dashboard</span>
             </div>
           </div>
           <AnalysisDashboard
@@ -194,8 +200,13 @@ export default function Home() {
             options={options}
             incentives={incentives}
             recommendation={recommendation}
+            loadingIncentives={loadingIncentives}
+            loadingRecommendation={loadingRecommendation}
             track={selectedTrack}
+            currency={currency}
+            selectedSolarLabel={selectedSolarLabel}
             onUpdateBill={handleUpdateBill}
+            onBack={() => setStep(2)}
           />
         </>
       )}

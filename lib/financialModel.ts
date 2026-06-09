@@ -9,8 +9,7 @@ const SOLAR_PERFORMANCE_RATIO = 0.80;
 // ASSUMPTION: Levelised cost of solar generation, ₹/kWh
 const SOLAR_LCOE = 2.50;
 // ASSUMPTION: Standard financial discount rate (used as hurdle rate reference)
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const DISCOUNT_RATE = 0.12;
+export const DISCOUNT_RATE = 0.12;
 // ASSUMPTION: India CEA grid emission factor 2023, kgCO2/kWh
 const INDIA_GRID_EF = 0.82;
 const PROJECT_LIFE = 20;
@@ -63,8 +62,9 @@ export interface NasaData {
 
 export interface YearData {
   year: number;
-  cashFlow: number;
-  cumulative: number;
+  cashFlow: number;       // annual saving this year (always positive for capex options)
+  cumulative: number;     // sum of cashFlows years 1..N (always growing for capex options)
+  netPosition: number;    // cumulative - netCapex (negative early, positive after payback)
 }
 
 export interface OptionResult {
@@ -78,6 +78,7 @@ export interface OptionResult {
   adBenefit: number;
   subsidyAmt: number;
   gstITC: number;
+  totalIncentives: number;    // adBenefit + subsidyAmt + gstITC
   taxSaved: number;
   systemKw: number;
   annualGenKwh: number;
@@ -85,12 +86,16 @@ export interface OptionResult {
   annualSavingPct: number;
   irr: number | null;
   paybackYears: number | null;
+  grossPaybackYears: number | null;   // payback without any incentives
   paybackLabel: string;
   co2AvoidedTonnes: number;
+  co2ReductionPct: number;            // capped at 99%
+  energyOffsetPct: number;            // % of hotel's total consumption covered
   cashFlows: YearData[];
   complexity: "Very Low" | "Low" | "Medium" | "High";
   track: "ownership" | "zerocapex";
   annualCostImpact: number;
+  ppaTariff?: number;                 // for PPA options
 }
 
 export function calculateNPV(cashFlows: number[], initial: number, rate: number): number {
@@ -115,13 +120,20 @@ export function calculateIRR(initialInvestment: number, cashFlows: number[]): nu
   return rate;
 }
 
-function buildCashFlows(yr1: number, escalation: number, years = PROJECT_LIFE): YearData[] {
+function buildCashFlows(yr1Saving: number, escalation: number, netCapex: number, years = PROJECT_LIFE): YearData[] {
   const flows: YearData[] = [];
   let cumulative = 0;
   for (let y = 1; y <= years; y++) {
-    const cf = yr1 * Math.pow(1 + escalation / 100, y - 1);
+    // Annual saving year N = yr1Saving × (1 + esc/100)^(N-1)
+    // For owned solar: this is always positive when grid tariff > SOLAR_LCOE
+    const cf = yr1Saving * Math.pow(1 + escalation / 100, y - 1);
     cumulative += cf;
-    flows.push({ year: y, cashFlow: Math.round(cf), cumulative: Math.round(cumulative) });
+    flows.push({
+      year: y,
+      cashFlow: Math.round(cf),
+      cumulative: Math.round(cumulative),
+      netPosition: Math.round(cumulative - netCapex),
+    });
   }
   return flows;
 }
@@ -134,6 +146,11 @@ export function calculateAllOptions(hotel: Hotel, state: StateData, nasa: NasaDa
   const solar = nasa.solarIrradiance;
   const results: OptionResult[] = [];
 
+  function co2Pct(avoidedTonnes: number): number {
+    const baseline = hotel.emissionsKgCO2e / 1000;
+    return Math.min(99, (avoidedTonnes / baseline) * 100);
+  }
+
   // --- Option 1: Owned Onsite PV ---
   {
     const maxFromArea = hotel.floorAreaSqm * 0.012;
@@ -143,12 +160,17 @@ export function calculateAllOptions(hotel: Hotel, state: StateData, nasa: NasaDa
     const adBenefit = grossCapex * (state.adDepreciationPct / 100) * state.corporateTaxRate;
     const subsidyAmt = systemKw * 1000 * state.stateSubsidyPerW;
     const gstITC = grossCapex * (state.gstOnEquipmentPct / 100) * 0.45;
+    // INCENTIVE STACK APPLIED: AD + state subsidy + GST ITC all reduce
+    // effective investment before IRR and payback are calculated
     const netCapex = grossCapex - adBenefit - subsidyAmt - gstITC;
+    const totalIncentives = adBenefit + subsidyAmt + gstITC;
     const annualGenKwh = systemKw * solar * 365 * SOLAR_PERFORMANCE_RATIO;
+    // Annual saving yr1 = annualGenKwh × (tariff - SOLAR_LCOE) — always positive when grid tariff > LCOE
     const yr1Saving = annualGenKwh * (tariff - SOLAR_LCOE);
-    const cashFlows = buildCashFlows(yr1Saving, esc);
+    const cashFlows = buildCashFlows(yr1Saving, esc, netCapex);
     const irr = calculateIRR(netCapex, cashFlows.map(c => c.cashFlow));
     const paybackYears = yr1Saving > 0 ? netCapex / yr1Saving : null;
+    const grossPaybackYears = yr1Saving > 0 ? grossCapex / yr1Saving : null;
     const co2AvoidedTonnes = (annualGenKwh * INDIA_GRID_EF) / 1000;
     results.push({
       id: "onsite-owned",
@@ -160,15 +182,19 @@ export function calculateAllOptions(hotel: Hotel, state: StateData, nasa: NasaDa
       adBenefit: Math.round(adBenefit),
       subsidyAmt: Math.round(subsidyAmt),
       gstITC: Math.round(gstITC),
+      totalIncentives: Math.round(totalIncentives),
       taxSaved: Math.round(adBenefit),
       systemKw: Math.round(systemKw),
       annualGenKwh: Math.round(annualGenKwh),
       yr1Saving: Math.round(yr1Saving),
       annualSavingPct: (yr1Saving / annualBill) * 100,
-      irr: irr,
-      paybackYears: paybackYears,
+      irr,
+      paybackYears,
+      grossPaybackYears,
       paybackLabel: paybackYears ? `${paybackYears.toFixed(1)} yrs` : "N/A",
       co2AvoidedTonnes: Math.round(co2AvoidedTonnes * 10) / 10,
+      co2ReductionPct: co2Pct(co2AvoidedTonnes),
+      energyOffsetPct: Math.min(99, (annualGenKwh / annualKwh) * 100),
       cashFlows,
       complexity: "High",
       track: "ownership",
@@ -177,21 +203,26 @@ export function calculateAllOptions(hotel: Hotel, state: StateData, nasa: NasaDa
   }
 
   // --- Option 2: Owned Offsite PV ---
+  // ASSUMPTION: Land cost excluded — offsite RE projects typically lease land in designated RE zones.
+  // Add ₹0–2L/acre/year as opex if applicable. Land purchase cost is NOT included in netCapex.
   {
     const available = state.openAccessAvailable;
     const systemKw = (annualKwh * 0.65) / (solar * 365 * SOLAR_PERFORMANCE_RATIO);
     const grossCapex = systemKw * 1000 * CAPEX_OFFSITE_PER_W;
     const adBenefit = grossCapex * (state.adDepreciationPct / 100) * state.corporateTaxRate;
+    const subsidyAmt = 0; // no state subsidy for offsite ground mount
     const gstITC = grossCapex * (state.gstOnEquipmentPct / 100) * 0.45;
-    const netCapex = grossCapex - adBenefit - gstITC;
+    // INCENTIVE STACK APPLIED: AD + GST ITC reduce effective investment
+    const netCapex = grossCapex - adBenefit - subsidyAmt - gstITC;
+    const totalIncentives = adBenefit + gstITC;
     const annualGenKwh = systemKw * solar * 365 * SOLAR_PERFORMANCE_RATIO;
     const effectiveCostPerUnit = SOLAR_LCOE - 0.3 + state.openAccessChargePerUnit;
     const yr1Saving = annualKwh * 0.65 * (tariff - effectiveCostPerUnit);
-    const cashFlows = buildCashFlows(yr1Saving, esc);
+    const cashFlows = available ? buildCashFlows(yr1Saving, esc, netCapex) : [];
     const irr = available ? calculateIRR(netCapex, cashFlows.map(c => c.cashFlow)) : null;
     const paybackYears = available && yr1Saving > 0 ? netCapex / yr1Saving : null;
-    const annualGenForEmissions = annualKwh * 0.65;
-    const co2AvoidedTonnes = (annualGenForEmissions * INDIA_GRID_EF) / 1000;
+    const grossPaybackYears = available && yr1Saving > 0 ? grossCapex / yr1Saving : null;
+    const co2AvoidedTonnes = ((annualKwh * 0.65) * INDIA_GRID_EF) / 1000;
     results.push({
       id: "offsite-owned",
       label: "Owned Offsite PV",
@@ -203,16 +234,20 @@ export function calculateAllOptions(hotel: Hotel, state: StateData, nasa: NasaDa
       adBenefit: Math.round(adBenefit),
       subsidyAmt: 0,
       gstITC: Math.round(gstITC),
+      totalIncentives: Math.round(totalIncentives),
       taxSaved: Math.round(adBenefit),
       systemKw: Math.round(systemKw),
       annualGenKwh: Math.round(annualGenKwh),
       yr1Saving: available ? Math.round(yr1Saving) : 0,
-      annualSavingPct: available ? (yr1Saving / (hotel.monthlyElectricityBillINR * 12)) * 100 : 0,
+      annualSavingPct: available ? (yr1Saving / annualBill) * 100 : 0,
       irr,
       paybackYears,
+      grossPaybackYears,
       paybackLabel: available && paybackYears ? `${paybackYears.toFixed(1)} yrs` : "N/A",
       co2AvoidedTonnes: Math.round(co2AvoidedTonnes * 10) / 10,
-      cashFlows: available ? cashFlows : [],
+      co2ReductionPct: co2Pct(co2AvoidedTonnes),
+      energyOffsetPct: Math.min(65, (annualGenKwh / annualKwh) * 100),
+      cashFlows,
       complexity: "High",
       track: "ownership",
       annualCostImpact: available ? Math.round(yr1Saving) : 0,
@@ -226,7 +261,7 @@ export function calculateAllOptions(hotel: Hotel, state: StateData, nasa: NasaDa
     const systemKw = Math.min(maxFromArea, maxFromLoad);
     const annualGenKwh = systemKw * solar * 365 * SOLAR_PERFORMANCE_RATIO;
     const yr1Saving = annualGenKwh * (tariff - state.bestSolarPPATariff);
-    const cashFlows = buildCashFlows(yr1Saving, esc);
+    const cashFlows = buildCashFlows(yr1Saving, esc, 0);
     const co2AvoidedTonnes = (annualGenKwh * INDIA_GRID_EF) / 1000;
     results.push({
       id: "ppa-onsite",
@@ -238,19 +273,24 @@ export function calculateAllOptions(hotel: Hotel, state: StateData, nasa: NasaDa
       adBenefit: 0,
       subsidyAmt: 0,
       gstITC: 0,
+      totalIncentives: 0,
       taxSaved: 0,
       systemKw: Math.round(systemKw),
       annualGenKwh: Math.round(annualGenKwh),
       yr1Saving: Math.round(yr1Saving),
-      annualSavingPct: (yr1Saving / (hotel.monthlyElectricityBillINR * 12)) * 100,
+      annualSavingPct: (yr1Saving / annualBill) * 100,
       irr: null,
       paybackYears: null,
+      grossPaybackYears: null,
       paybackLabel: "Immediate",
       co2AvoidedTonnes: Math.round(co2AvoidedTonnes * 10) / 10,
+      co2ReductionPct: co2Pct(co2AvoidedTonnes),
+      energyOffsetPct: Math.min(55, (annualGenKwh / annualKwh) * 100),
       cashFlows,
       complexity: "Low",
-      track: "ownership",
+      track: "zerocapex",
       annualCostImpact: Math.round(yr1Saving),
+      ppaTariff: state.bestSolarPPATariff,
     });
   }
 
@@ -260,7 +300,7 @@ export function calculateAllOptions(hotel: Hotel, state: StateData, nasa: NasaDa
     const effectiveRate = state.bestSolarPPATariff + state.openAccessChargePerUnit;
     const yr1Saving = annualKwh * 0.80 * (tariff - effectiveRate);
     const annualGenKwh = annualKwh * 0.80;
-    const cashFlows = buildCashFlows(yr1Saving, esc);
+    const cashFlows = available ? buildCashFlows(yr1Saving, esc, 0) : [];
     const co2AvoidedTonnes = (annualGenKwh * INDIA_GRID_EF) / 1000;
     results.push({
       id: "ppa-offsite",
@@ -273,25 +313,31 @@ export function calculateAllOptions(hotel: Hotel, state: StateData, nasa: NasaDa
       adBenefit: 0,
       subsidyAmt: 0,
       gstITC: 0,
+      totalIncentives: 0,
       taxSaved: 0,
       systemKw: 0,
       annualGenKwh: Math.round(annualGenKwh),
       yr1Saving: available ? Math.round(yr1Saving) : 0,
-      annualSavingPct: available ? (yr1Saving / (hotel.monthlyElectricityBillINR * 12)) * 100 : 0,
+      annualSavingPct: available ? (yr1Saving / annualBill) * 100 : 0,
       irr: null,
       paybackYears: null,
+      grossPaybackYears: null,
       paybackLabel: "Immediate",
       co2AvoidedTonnes: Math.round(co2AvoidedTonnes * 10) / 10,
-      cashFlows: available ? cashFlows : [],
+      co2ReductionPct: co2Pct(co2AvoidedTonnes),
+      energyOffsetPct: 80,
+      cashFlows,
       complexity: "Medium",
-      track: "ownership",
+      track: "zerocapex",
       annualCostImpact: available ? Math.round(yr1Saving) : 0,
+      ppaTariff: state.bestSolarPPATariff + state.openAccessChargePerUnit,
     });
   }
 
   // --- Option 5: Utility Green Tariff ---
   {
     const yr1Impact = -(annualKwh * state.greenTariffPremiumPerUnit);
+    const cashFlows = buildCashFlows(yr1Impact, esc, 0);
     results.push({
       id: "green-tariff",
       label: "Utility Green Tariff",
@@ -302,16 +348,20 @@ export function calculateAllOptions(hotel: Hotel, state: StateData, nasa: NasaDa
       adBenefit: 0,
       subsidyAmt: 0,
       gstITC: 0,
+      totalIncentives: 0,
       taxSaved: 0,
       systemKw: 0,
       annualGenKwh: 0,
       yr1Saving: Math.round(yr1Impact),
-      annualSavingPct: (yr1Impact / (hotel.monthlyElectricityBillINR * 12)) * 100,
+      annualSavingPct: (yr1Impact / annualBill) * 100,
       irr: null,
       paybackYears: null,
+      grossPaybackYears: null,
       paybackLabel: "N/A",
-      co2AvoidedTonnes: (annualKwh * INDIA_GRID_EF) / 1000,
-      cashFlows: buildCashFlows(yr1Impact, esc),
+      co2AvoidedTonnes: Math.round((annualKwh * INDIA_GRID_EF) / 1000 * 10) / 10,
+      co2ReductionPct: 99,
+      energyOffsetPct: 100,
+      cashFlows,
       complexity: "Very Low",
       track: "zerocapex",
       annualCostImpact: Math.round(yr1Impact),
@@ -321,6 +371,7 @@ export function calculateAllOptions(hotel: Hotel, state: StateData, nasa: NasaDa
   // --- Option 6: EAC / REC ---
   {
     const annualCost = annualKwh * state.recPricePerUnit;
+    const cashFlows = buildCashFlows(-annualCost, 2, 0);
     results.push({
       id: "eac",
       label: "Energy Attribute Certificates",
@@ -331,16 +382,20 @@ export function calculateAllOptions(hotel: Hotel, state: StateData, nasa: NasaDa
       adBenefit: 0,
       subsidyAmt: 0,
       gstITC: 0,
+      totalIncentives: 0,
       taxSaved: 0,
       systemKw: 0,
       annualGenKwh: 0,
       yr1Saving: -Math.round(annualCost),
-      annualSavingPct: (-annualCost / (hotel.monthlyElectricityBillINR * 12)) * 100,
+      annualSavingPct: (-annualCost / annualBill) * 100,
       irr: null,
       paybackYears: null,
+      grossPaybackYears: null,
       paybackLabel: "N/A",
-      co2AvoidedTonnes: (annualKwh * INDIA_GRID_EF) / 1000,
-      cashFlows: buildCashFlows(-annualCost, 2),
+      co2AvoidedTonnes: Math.round((annualKwh * INDIA_GRID_EF) / 1000 * 10) / 10,
+      co2ReductionPct: 99,
+      energyOffsetPct: 100,
+      cashFlows,
       complexity: "Very Low",
       track: "zerocapex",
       annualCostImpact: -Math.round(annualCost),

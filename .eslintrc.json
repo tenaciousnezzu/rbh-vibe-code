@@ -1,3 +1,16 @@
 {
-  "extends": ["next/core-web-vitals", "next/typescript"]
+  "extends": ["next/core-web-vitals", "next/typescript"],
+  "rules": {
+    "no-restricted-syntax": [
+      "error",
+      {
+        "selector": "Literal[value=/₹/]",
+        "message": "Hardcoded rupee symbol detected. Use formatMoney() from /lib/money.ts instead."
+      },
+      {
+        "selector": "TemplateElement[value.raw=/₹/]",
+        "message": "Hardcoded rupee symbol in template literal. Use formatMoney() from /lib/money.ts instead."
+      }
+    ]
+  }
 }

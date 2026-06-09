@@ -5,8 +5,8 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 export const metadata: Metadata = {
-  title: "RBH Vibe Code — Renewable Energy Dashboard",
-  description: "Radisson Blu Hotels India — Renewable Energy Strategy Tool",
+  title: "Renewable Energy Dashboard",
+  description: "Find the right renewable energy path for your property",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
