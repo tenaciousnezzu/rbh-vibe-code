@@ -45,7 +45,7 @@ All monetary values must use ${symbol}. Make vendors realistic for ${hotel.city}
 
   try {
     const message = await client.messages.create({
-      model: "claude-sonnet-4-20250514",
+      model: "claude-sonnet-4-6",
       max_tokens: 1500,
       system: systemPrompt,
       messages: [{ role: "user", content: prompt }],
