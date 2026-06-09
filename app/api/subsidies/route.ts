@@ -48,10 +48,10 @@ Respond with ONLY valid JSON array, no markdown, no explanation.`;
     const stateSubsidyAmt = `${symbol}${(1.5 * rate).toFixed(2)}–${symbol}${(2 * rate).toFixed(2)}/W on system cost`;
     const fallback = [
       {
-        name: "Accelerated Depreciation (80%)",
+        name: "Accelerated Depreciation (60%)",
         type: "tax_benefit",
-        amount: "80% in Year 1",
-        howToUse: "Claim 80% of solar system cost as depreciation in Year 1 under Section 32 of Income Tax Act. Effectively reduces net capex by ~20% for entities in 25% tax bracket.",
+        amount: "60% in Year 1",
+        howToUse: "Claim 60% of solar system cost as depreciation in Year 1 under Section 32 of Income Tax Act. Effectively reduces net capex by ~15% for entities in 25% tax bracket.",
         applicableTo: ["onsite-owned", "offsite-owned"],
       },
       {

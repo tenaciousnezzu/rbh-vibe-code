@@ -22,8 +22,8 @@ function rewriteHeadline(name: string, state = ""): { header: string; subtext: s
   const n = name.toLowerCase();
   if (n.includes("accelerated depreciation") || n.includes("write off") || n.includes("section 32")) {
     return {
-      header: "Write off 80% of your solar investment in Year 1",
-      subtext: "Under IT Act Section 32 — reduces your effective investment by ~20% if your entity pays corporate tax at 25%",
+      header: "Write off 60% of your solar investment in Year 1",
+      subtext: "Under IT Act Section 32 — reduces your effective investment by ~15% if your entity pays corporate tax at 25%",
     };
   }
   if (n.includes("subsidy") || n.includes("grant") || n.includes("capital")) {

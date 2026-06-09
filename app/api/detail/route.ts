@@ -60,7 +60,7 @@ All monetary values must use ${symbol}. Make vendors realistic for ${hotel.city}
         { number: 1, title: "Site Assessment", description: `Commission a structural and solar assessment of ${hotel.name}. Engage a MNRE-empanelled vendor for shadow analysis, roof load capacity check, and shading report. This typically takes 2–3 weeks to complete.` },
         { number: 2, title: "RFP & Vendor Selection", description: `Issue RFP to at least 3 EPC vendors in ${hotel.city}. Compare on system yield guarantee, O&M terms, and equipment brand warranties — minimum 25 years for panels and 10 years for inverters. Shortlist based on references from similar hotel projects.` },
         { number: 3, title: "Regulatory Approvals", description: `Apply for net metering connection to ${state.discom}. Typical approval takes 30–60 days. Ensure building occupancy certificate is current before submission.` },
-        { number: 4, title: "Financial Closure", description: "Finalise capex funding using own equity, a green loan at 7–8%, or SIDBI RE scheme. Claim 80% accelerated depreciation in the first year to reduce effective outflow significantly." },
+        { number: 4, title: "Financial Closure", description: "Finalise capex funding using own equity, a green loan at 7–8%, or SIDBI RE scheme. Claim 60% accelerated depreciation in the first year to reduce effective outflow significantly." },
         { number: 5, title: "Installation & Commissioning", description: "EPC installs panels, inverters, and monitoring system over 4–8 weeks. Commissioning includes grid synchronisation test, performance verification, and handover of O&M documentation." },
       ],
       vendorsToContact: [
